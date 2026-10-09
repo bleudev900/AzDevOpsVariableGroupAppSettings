@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (PSScriptAnalyzer + manifest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache PowerShell modules
+        uses: actions/cache@v6
+        with:
+          path: ~/.local/share/powershell/Modules
+          key: psmodules-lint-${{ runner.os }}-${{ hashFiles('build.ps1') }}
+
+      - name: Install Pester and PSScriptAnalyzer
+        shell: pwsh
+        run: ./build.ps1 -Task Bootstrap
+
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: ./build.ps1 -Task Lint
+
+      - name: Test-ModuleManifest
+        shell: pwsh
+        run: ./build.ps1 -Task Manifest
+
+  test:
+    name: Test (${{ matrix.os }}, ${{ matrix.shell }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            shell: pwsh
+            modules: ~/.local/share/powershell/Modules
+          - os: windows-latest
+            shell: pwsh
+            modules: ~\Documents\PowerShell\Modules
+          - os: windows-latest
+            shell: powershell
+            modules: ~\Documents\WindowsPowerShell\Modules
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache PowerShell modules
+        uses: actions/cache@v6
+        with:
+          path: ${{ matrix.modules }}
+          key: psmodules-test-${{ runner.os }}-${{ matrix.shell }}-${{ hashFiles('build.ps1') }}
+
+      - name: PowerShell version
+        run: $PSVersionTable | Format-Table -AutoSize | Out-String | Write-Output
+
+      - name: Install Pester
+        run: ./build.ps1 -Task Bootstrap
+
+      # The Azure CLI is not used by the tests: every az call goes through the private
+      # Invoke-AzCli helper, which the Pester suite mocks.
+      - name: Test-ModuleManifest
+        run: ./build.ps1 -Task Manifest
+
+      - name: Pester
+        run: ./build.ps1 -Task Test -TestResultPath "TestResults/testResults-${{ runner.os }}-${{ matrix.shell }}.xml"
+
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ runner.os }}-${{ matrix.shell }}
+          path: TestResults/*.xml
+          if-no-files-found: warn

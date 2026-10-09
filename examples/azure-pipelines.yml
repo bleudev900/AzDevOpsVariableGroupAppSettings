@@ -1,0 +1,45 @@
+# Example: apply SETTING__* variables from the "MyApp-Prod" variable group to an App Service.
+# See README.md for the required permissions.
+
+trigger: none
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  # Linking the group is only required for secret variables: it lets $(SETTING__...) macros below resolve
+  # so the secrets can be mapped into the step's environment. Non-secret values are read through the API.
+  - group: MyApp-Prod
+
+steps:
+  - checkout: none
+
+  # Get the module (pin a tag or commit SHA for repeatable deployments).
+  - pwsh: git clone --depth 1 https://github.com/bleudev900/AzDevOpsVariableGroupAppSettings.git "$(Agent.TempDirectory)/AzDevOpsVariableGroupAppSettings"
+    displayName: Get AzDevOpsVariableGroupAppSettings
+
+  - task: AzureCLI@2
+    displayName: Apply app settings from variable group
+    inputs:
+      azureSubscription: my-arm-service-connection   # identity used for "az webapp ..."
+      scriptType: pscore
+      scriptLocation: inlineScript
+      inlineScript: |
+        # The azure-devops extension is preinstalled on Microsoft-hosted agents; this is a no-op there.
+        az extension add --name azure-devops --only-show-errors
+        Import-Module "$(Agent.TempDirectory)/AzDevOpsVariableGroupAppSettings/AzDevOpsVariableGroupAppSettings.psd1"
+
+        $result = Set-AppServiceSettingFromVariableGroup `
+            -VariableGroupName 'MyApp-Prod' `
+            -Prefix 'SETTING__' `
+            -ResourceGroupName 'rg-web-prod' `
+            -AppName 'contoso-web-prod' `
+            -Mode Merge
+        $result | Format-List VariableGroupName, AppName, Mode, Applied, Added, Changed, Removed, Unchanged
+    env:
+      # Token used for "az pipelines variable-group ..." (identity: the project's Build Service account).
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+      # Secret variables are never returned by the API and never mapped into env automatically:
+      # map each secret explicitly, using the variable name as the environment variable name.
+      SETTING__ConnectionStrings__Default: $(SETTING__ConnectionStrings__Default)
+      SETTING__Payments__ApiKey: $(SETTING__Payments__ApiKey)

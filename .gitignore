@@ -1,0 +1,3 @@
+TestResults/
+# Never commit resolved settings / secrets
+*.secrets.json
